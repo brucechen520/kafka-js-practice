@@ -1,6 +1,6 @@
 # Test
 - The primary goal of this experiment was to verify Kafka's At-Least-Once delivery guarantee. We simulated transient downstream failures (e.g., database timeouts) to observe how the consumer manages offsets and retries without losing data.
-  - ![failure handle](./result.png)
+  - ![failure handle](./result.jpg)
   - see [dashboard](http://localhost:8080)
   - `node scenario3-failure-handle/producer.js`
   - `node scenario3-failure-handle/consumer.js`
