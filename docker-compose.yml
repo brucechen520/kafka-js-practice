@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  broker:
+    image: apache/kafka:latest
+    container_name: broker
+    ports:
+      - '9092:9092'
+    environment:
+      # 節點基本資訊
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # 監聽設定：區分內部通訊與外部存取
+      # 9092 用於外掛程式連線，9094 用於 Docker 內部容器(如 UI)連線，9093 用於 Controller 通訊
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_INTERNAL://0.0.0.0:9094'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://broker:9094'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT'
+
+      # KRaft 投票者設定
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@broker:9093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+
+      # 單機測試環境優化設定
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+
+      # 必須設定 Cluster ID 才能讓 KRaft 啟動 (apache/kafka 映像檔特性)
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - '8080:8080'
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-kraft
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker:9094
+    depends_on:
+      - broker
