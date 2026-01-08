@@ -1,5 +1,6 @@
 # Test
 - Objective: To demonstrate that messages with the same Partition Key (e.g., Order ID) are consistently routed to the same Kafka Partition, ensuring strictly ordered message delivery within that partition.
+證明同一個訂單（Key）永遠進入同一個分區（Partition），且順序不亂。
   - `node scenario1/producer.js`
   - see [dashboard](http://localhost:8080)
   - ![Same Key in same partition](./result.png)
