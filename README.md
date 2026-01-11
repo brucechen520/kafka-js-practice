@@ -25,7 +25,7 @@
   - **Terminal B:** `Consumer 2 started. Assigned partitions: [1]`
   - **Terminal C:** `Consumer 3 started. Assigned partitions: [2]`
 
-### Scenario 3:
+### Scenario 3 failure handle:
 - The primary goal of this experiment was to verify Kafka's At-Least-Once delivery guarantee. We simulated transient downstream failures (e.g., database timeouts) to observe how the consumer manages offsets and retries without losing data.
   - see [dashboard](http://localhost:8080)
   - `node scenario3-failure-handle/producer.js`
@@ -52,3 +52,6 @@
     - Within a single partition, the consumer strictly followed the order.
     - In Partition 2, Offset 4 failed and was retried. The consumer did not attempt Offset 5 until Offset 4 was successfully committed.
     - Outcome: Verified that message order is preserved within a partition even during failure recovery.
+
+### Scenario 4 key optimize (avoid skewed):
+- see [Scenario 4 README](scenario4-key-optimize/README.md)
