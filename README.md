@@ -55,3 +55,6 @@
 
 ### Scenario 4 key optimize (avoid skewed):
 - see [Scenario 4 README](scenario4-key-optimize/README.md)
+
+### Scenario 5
+- see [Scenario 5 README](scenario5-enhance-producer-throughput-using-batch-and-compression/README.MD)
