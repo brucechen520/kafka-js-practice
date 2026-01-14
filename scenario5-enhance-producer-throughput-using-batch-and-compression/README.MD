@@ -21,3 +21,6 @@
 
 2. **CPU & IO Efficiency**:
    Compressing a batch is far more efficient than compressing individual small messages. It significantly reduces the size of data written to the broker's disk.
+
+## Summary
+- In summary, batching turns Kafka from a simple message queue into a heavy-duty data pipeline. While individual sending provides the fastest response time for a single message, batching achieves massive efficiency gains by amortizing the cost of network overhead and maximizing compression ratios.
