@@ -1,103 +1,76 @@
-這是一份為你整合後的 `advanced-scenarios` 完整 **README.md**。這份文件結合了你目前的高併發業務背景、技術實驗進度，以及未來晉升「Kafka 架構師」的學習藍圖。
+這十個案例涵蓋了 Kafka 在 **NextDrive (能源物聯網)** 這種大規模、高穩定性需求下的核心挑戰。我為你整理的這份「實戰練習清單」，特別強化了**數據化**的情境描述。
 
 ---
 
-# 🏗️ Advanced Scenarios: Kafka & Distributed Systems Lab
+## 🚀 Kafka 高階實戰：十個核心架構陷阱與對策
 
-這個資料夾包含了分散式系統中進階架構模式的實作與驗證。我們以高併發(如購票)作為核心業務場景，探討如何解決資料一致性、高併發熱點以及跨服務事務等核心難題。
+### 1. 熱點分區 (Hot Partition) 與負載不均
+* **詳細情境：** 系統每秒接收 **50,000** 筆電力數據，擁有 100 個 Partitions。使用 `Factory_ID` 作為 Message Key。某個大型工廠（ID: A01）佔了總流量的 **40%**。
+* **詳細問題：** 負責 A01 的單一 Broker CPU 飆升至 **95%**，磁碟 I/O 飽和。即便增加 Consumer 數量到 100 個，由於 A01 只會進入同一個 Partition，導致 99 個 Consumer 閒置，1 個 Consumer 處理不及，延遲（Lag）持續擴大。
+* **解法：** 使用 **Composite Key**（如 `Factory_ID + Device_ID`）或在 Key 後面加上隨機後綴（Salted Key）來強制分散。
+* **權衡 (Trade-off)：** 解決了負載不均，但**犧牲了工廠層級的全局順序性**，僅能保證設備層級順序。
 
-## 🚀 晉級之路 (Roadmap)
+### 2. 巨型封包 (Large Payload) 導致的 OOM
+* **詳細情境：** IoT 設備回報高頻波形數據，單筆訊息大小達 **5MB**。Node.js 服務設定 `heap-size` 為 2GB，同時有 50 個併發請求試圖發送數據。
+* **詳細問題：** 生產端（Producer）的 `buffer.memory` 迅速被填滿，Node.js 記憶體飆升至 **1.9GB**，頻繁觸發 GC 導致 Event Loop 阻塞超過 500ms，最終發生 **OOM (Out of Memory) 崩潰**。
+* **解法：** 實施 **Claim Check Pattern**：將 5MB 數據存入 S3/MinIO，Kafka 只傳送存儲路徑 (URL)。
+* **權衡 (Trade-off)：** 降低了記憶體壓力與 Kafka 負擔，但**增加了外部系統依賴**與網路往返（RTT）的延遲。
 
-為了從「會用 Kafka 的工程師」進化到 **「Kafka 架構師」**，本實驗室規劃了四個階段的成長路徑：
 
-| 階段 | 主題 | 核心目標 | 狀態 |
-| --- | --- | --- | --- |
-| **Repo 1** | **Resilience & Perf** | 穩固傳輸、不掉資料、分區效能調優 | ✅ 已完成 |
-| **Repo 2** | **Consistency** | **Transactional Outbox Pattern** (DB 與 Kafka 一致性) | 🛠 實作中 |
-| **Repo 3** | **Guaranteed Logic** | **Exactly-Once (EOS)** & **Delay Queues** (金流與延遲任務) | 📅 待實作 |
-| **Repo 4** | **Real-time Analytics** | **Kafka Streams** (複雜流式狀態計算) | 📅 待實作 |
 
----
+### 3. 重平衡風暴 (Rebalance Storm)
+* **詳細情境：** Consumer 處理一筆複雜的能源調度運算（包含多次 DB 查詢）需要 **45 秒**。Kafka 預設 `max.poll.interval.ms` 為 30 秒。
+* **詳細問題：** Kafka 認為 Consumer 死亡，將其踢出群組並觸發 Rebalance。重平衡期間所有 Consumer 停止工作。剛分配完 Partition，下一個 Consumer 又因為處理太久被踢出，導致系統陷入 **持續重平衡的死循環**。
+* **解法：** 調大 `max.poll.interval.ms` 或將業務邏輯交給 **Worker Thread Pool** 異步處理，讓 Consumer Thread 能快速回到 Poll 迴圈。
+* **權衡 (Trade-off)：** 調大參數會延遲「真正崩潰」的偵測時間；異步處理則**大幅增加了 Offset 管理的複雜度**（需手動確保邏輯執行完才 Commit）。
 
-## 🚦 進度追蹤 (Implementation Progress)
+### 4. 生產端重試 (Retry) 導致的順序錯亂
+* **詳細情境：** 設備依序發送「開機(A)」、「降壓(B)」、「關機(C)」指令。網路不穩導致 **5% 掉封包**。Producer 開啟 `retries=3`。
+* **詳細問題：** A 發送失敗進入重試隊列，此時 B 發送成功。稍後 A 重試成功。Broker 存儲順序變為 **B -> A -> C**。工廠收到指令後先降壓再開機，導致設備跳脫。
+* **解法：** 開啟生產端等冪性 `enable.idempotence=true`。
+* **權衡 (Trade-off)：** 保證了即使重試也會維持正確順序，但**僅支援較新版本的 Kafka (0.11+)** 且會增加些微的生產端記憶體開銷。
 
-本目錄採用 `[編號]-[pattern-name]-[target-problem]` 的格式命名，以便於追蹤特定的分散式系統痛點。
+### 5. 毒藥訊息 (Poison Pill) 導致的消費停滯
+* **詳細情境：** 某一筆 JSON 格式錯誤的訊息進入 Topic。Consumer 使用 `JSON.parse()` 但未包裝 `try-catch`。
+* **詳細問題：** Consumer 讀取該訊息後崩潰重啟。重啟後又從同一個 Offset 開始讀取，再次崩潰。導致該 Partition 的**數據處理完全卡死**，後方數百萬筆正常數據無法被消費。
+* **解法：** 實作 **Dead Letter Queue (DLQ)**：在代碼中捕捉異常，將無法處理的訊息轉發到「死信隊列」並手動 Commit 原 Offset。
+* **權衡 (Trade-off)：** 保證了系統持續運行，但**需要額外機制監控與人工介入處理 DLQ 中的數據**。
 
-| 編號 | 情境名稱 | 核心模式 | 業務場景 | 狀態 |
-| --- | --- | --- | --- | --- |
-| 01 | Outbox DB Consistency | Transactional Outbox | 抽獎紀錄原子性寫入 | 🛠 實作中 |
-| 02 | Saga Choreography | Saga Pattern | 跨服務失敗補償邏輯 | 📅 待實作 |
-| 03 | Hotkey Partition Skewing | Key Salting | 解決高併發熱點傾斜 | ✅ 已完成 |
-| 04 | Idempotent Consumer | Idempotency | 處理訊息重複消費 | 📅 待實作 |
+### 6. 消費者延遲 (Lag) 導致的磁碟爆滿
+* **詳細情境：** 下游資料庫維修，Consumer 停機 12 小時。每小時產生的數據量為 100GB。Kafka `retention.size` 設定為 1TB。
+* **詳細問題：** 數據持續堆積在 Broker 磁碟。當磁碟使用率達到 **90%** 時，Kafka 為了自保會停止接收任何生產端的數據（Blocked），導致全公司所有 IoT 數據接入中斷。
+* **解法：** 實施 **Tiered Storage**（如將舊數據移往 S3）或嚴格監控 Consumer Lag 並設定自動擴展（Auto-scaling）機制。
+* **權衡 (Trade-off)：** 提高了系統容錯力，但**分層存儲會增加讀取歷史數據時的延遲**。
 
----
+### 7. 網路抖動 (Network Flapping) 與 Ack 延遲
+* **詳細情境：** 雲端機房網路不穩，出現 **2% 封包丟失**。Producer 設定 `acks=all` 以確保能源計費數據不丟失。
+* **詳細問題：** 每一筆寫入都要等待所有 Replica 確認。網路抖動導致 `RequestTimeoutException` 頻發，寫入延遲（Latency）從 **10ms 噴發到 2000ms**，API 端出現大規模請求堆積。
+* **解法：** 調整 `min.insync.replicas` 與適度增加 `request.timeout.ms`，並在 API 端實作快速失敗（Circuit Breaker）。
+* **權衡 (Trade-off)：** 維持了高可靠性，但**在網路環境惡劣時，系統可用性（Availability）會顯著下降**。
 
-## 🛠️ 情境詳細說明
+### 8. 重複消費 (Duplicate Processing) 與冪等性缺失
+* **詳細情境：** Consumer 處理完數據並成功更新資料庫（計費 +100 元），但在執行 `consumer.commitSync()` 前發生網路斷線。
+* **詳細問題：** 重連後 Consumer 從舊 Offset 開始讀取，**重複執行**了加錢邏輯。對能源客戶而言，這會造成重複計費的客訴。
+* **解法：** 下游實作 **Idempotent Receiver**（利用資料庫 Unique Key 或處理狀態表）。
+* **權衡 (Trade-off)：** 徹底解決重複問題，但**增加了資料庫的查詢負擔（每次寫入前都要先查一次）**。
 
-<a name="01"></a>
+### 9. 叢集元數據 (Metadata) 負載過重
+* **詳細情境：** 為了區分不同客戶，系統建立了 **20,000 個 Topics**，每個 Topic 有 3 個 Replicas。
+* **詳細問題：** Kafka Controller 需要維護龐大的元數據。當某個 Broker 宕機時，觸發大規模的分區領導者選舉（Leader Election），導致 **Controller 記憶體爆掉**，整個叢集癱瘓超過 30 分鐘無法恢復。
+* **解法：** 進行 **Topic 合併**（使用單一大型 Topic 並在訊息內容中區分客戶 ID）並升級至 KRaft 模式（棄用 Zookeeper）。
+* **權衡 (Trade-off)：** 系統變穩定了，但**喪失了在 Topic 層級進行個別客戶權限控管 (ACL) 的靈活性**。
 
-### 01. Transactional Outbox Pattern (Consistency)
+### 10. 生產端緩衝阻塞 (Buffer Exhaustion)
+* **詳細情境：** 由於網路延遲，Producer 的 `buffer.memory` (預設 32MB) 已滿。`max.block.ms` 設定為 60 秒。
+* **詳細問題：** 所有的 `producer.send()` 調用都會被**阻塞 (Blocked)**。前端 Node.js API 因為這些阻塞的請求而耗盡了所有 Worker Threads / Event Loop 資源，導致整個 API 服務對外完全斷線，甚至連健康檢查都無法回應。
+* **解法：** 縮短 `max.block.ms` 讓請求快速報錯，並在 API 層級實作 **Backpressure (背壓)** 機制（如回傳 HTTP 503）。
+* **權衡 (Trade-off)：** 雖然部分設備資料會發送失敗，但**保證了 API 服務不會因為單一組件的延遲而整台掛掉**。
 
-* **目標**：確保資料庫更新與 Kafka 訊息發送的原子性。
-* **問題**：解決「雙寫 (Dual Write)」問題。如果資料庫寫入了訂單，但 Kafka 突然斷線沒發出訊息，該怎麼辦？
-* **方案**：在同一事務中寫入業務表與 `outbox` 表，由獨立的 **Relay Worker** 負責搬運訊息。
-
-<a name="02"></a>
-
-### 02. Saga Choreography Flow (Advanced Architecture)
-
-* **目標**：處理跨微服務的長事務與補償機制。
-* **流程**：`結帳服務` -> `庫存扣數` -> `物流發貨`。
-* **補償**：若「庫存扣數」失敗，自動觸發「結帳服務」的退款流程，確保最終一致性。
-
-<a name="03"></a>
-
-### 03. Hotkey Salting Logic (Performance)
-
-* **目標**：解決單一 Partition 負載過高（Skewing）的問題。
-* **場景**：極熱門演唱會聯名一番賞導致流量全部擠在同一個分區，造成單個 Consumer 過載。
-* **方案**：實作 **Key Salting** 技術均勻分散流量，並探討如何權衡順序性。
-
-<a name="04"></a>
-
-### 04. Idempotent Consumer & Retry
-
-* **目標**：確保訊息「至少一次（At-least-once）」傳遞時，不會造成重複業務操作。
-* **場景**：當網路抖動導致重複發送「中獎訊息」時，系統應識別出該訊息已處理過，避免使用者重複領取獎品。
-
----
-
-## 🧪 實驗啟動說明 (Experimental Guide)
-
-每個子資料夾均包含獨立的實作代碼與說明文件：
-
-```bash
-# 範例：進入 Hotkey 優化實驗
-cd 03-hotkey-partition-skewing
-
-# 執行測試
-node bad-hotkey-producer.js   # 觀察傾斜現象
-node good-salting-producer.js # 觀察優化結果
-
-```
 
 ---
 
-## 📝 未來預計實作 (Upcoming Challenges)
+## 🏁 AI Results
 
-1. **Exactly-Once Semantics (EOS)**: 透過 `transactional.id` 實現跨 Partition 的原子性寫入。
-2. **Delay Queue**: 利用多級 Topic 轉發實現「訂單 30 分鐘未付款自動取消」。
-3. **Kafka Streams**: 實作 Window Aggregation，在不依賴外部 DB 下計算即時熱門活動。
-4. **Static Membership**: 透過 `group.instance.id` 優化大規模 Consumer 重啟時的 Rebalance 停頓。
-
----
-
-### 💡 專案小提醒 (Tips)
-
-* **關於 TimeoutNegativeWarning**: 測試高併發時若遇到此警告，請檢查 `Date.now() - startTime` 邏輯，避免非同步回調導致時間計算產生負值。
-* **為什麼先做 Outbox Pattern？**: 這是微服務架構中最標準的技能。解決了 DB 與 Kafka 之間的一致性，後續的 Saga 與 EOS 才有意義。
-
----
-
-**下一步建議：**
-這份 README 清楚地展示了你的技術深度。如果你準備好了，我們可以開始實作 **01-transactional-outbox** 的 `relay-worker.js` 核心邏輯，或是設計對應的 MySQL Outbox 資料表 Schema？
+* **「穩定性」：** 拿出 **Case 3 (Rebalance)** 和 **Case 10 (Buffer Exhaustion)**。
+* **「數據正確性」：** 拿出 **Case 4 (Retry)** 和 **Case 8 (Idempotency)**。
+* **「性能與規模」：** 拿出 **Case 1 (Hot Partition)** 和 **Case 9 (Metadata)**。
